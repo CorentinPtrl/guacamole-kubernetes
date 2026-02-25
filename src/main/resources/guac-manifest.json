@@ -1,0 +1,11 @@
+{
+
+    "guacamoleVersion" : "1.6.0",
+
+    "name"      : "Kubernetes",
+    "namespace" : "kubernetes",
+
+    "authProviders"    : [
+        "fr.corentin.guacamole.kubernetes.auth.AuthenticationProvider"
+    ]
+}
