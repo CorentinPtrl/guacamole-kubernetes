@@ -22,6 +22,7 @@ import io.kubernetes.client.openapi.models.V1ServiceList;
 import io.kubernetes.client.openapi.models.V1ServicePort;
 import io.kubernetes.client.util.CallGeneratorParams;
 import io.kubernetes.client.util.Config;
+import io.kubernetes.client.util.generic.GenericKubernetesApi;
 import org.apache.guacamole.GuacamoleException;
 import org.apache.guacamole.net.auth.Connection;
 import org.apache.guacamole.net.auth.simple.SimpleConnection;
@@ -59,16 +60,16 @@ public class MachineDiscovery {
         return Integer.toString(hostname.hashCode());
     }
 
-    private String getPassword(String secretName) {
+    private String getPassword(String secretName, String namespace) {
         try {
-            V1Secret secret = coreV1Api.readNamespacedSecret(secretName, getCurrentNamespace(), null);
+            V1Secret secret = coreV1Api.readNamespacedSecret(secretName, namespace, null);
             if (secret.getData() != null && secret.getData().containsKey("password")) {
                 return new String(Base64.getDecoder().decode(secret.getData().get("password"))).trim();
             } else {
                 logger.warn("Secret " + secretName + " does not contain a 'password' key or has no data.");
             }
         } catch (ApiException e) {
-            logger.error("Failed to read secret " + secretName + " from namespace " + getCurrentNamespace() +
+            logger.error("Failed to read secret " + secretName + " from namespace " + namespace +
                     ". HTTP status: " + e.getCode() + ", message: " + e.getMessage(), e);
         }
         return "";
@@ -95,7 +96,7 @@ public class MachineDiscovery {
                          annotations.containsKey(PASSWORD_ANNOTATION);
         if (hasAuth) {
             guacConf.setParameter("username", annotations.get(USERNAME_ANNOTATION));
-            guacConf.setParameter("password", getPassword(annotations.get(PASSWORD_ANNOTATION)));
+            guacConf.setParameter("password", getPassword(annotations.get(PASSWORD_ANNOTATION), svc.getMetadata().getNamespace()));
         } else {
             guacConf.setParameter("disable-auth", "true");
         }
@@ -120,27 +121,15 @@ public class MachineDiscovery {
 
         informerFactory = new SharedInformerFactory(client);
 
-        SharedIndexInformer<V1Service> serviceInformer =
-                informerFactory.sharedIndexInformerFor(
-                        (CallGeneratorParams params) -> {
-                            return coreV1Api.listNamespacedServiceCall(
-                                    getCurrentNamespace(),
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    params.resourceVersion,
-                                    null,
-                                    null,
-                                    params.timeoutSeconds,
-                                    params.watch,
-                                    null);
-                        },
-                        V1Service.class,
-                        V1ServiceList.class);
+        GenericKubernetesApi serviceClient = new GenericKubernetesApi<>(
+                V1Service.class,
+                V1ServiceList.class,
+                "",
+                "v1",
+                "services",
+                client);
 
+        SharedIndexInformer<V1Service> serviceInformer = informerFactory.sharedIndexInformerFor(serviceClient, V1Service.class, 10000);
 
         serviceInformer.addEventHandler(new ResourceEventHandler<V1Service>() {
             @Override
@@ -181,7 +170,7 @@ public class MachineDiscovery {
         });
 
         informerFactory.startAllRegisteredInformers();
-        System.out.println("Informers started, watching for services in namespace " + getCurrentNamespace());
+        System.out.println("Informers started, watching for services in all namespaces");
     }
 
     public void stop() {
@@ -192,16 +181,5 @@ public class MachineDiscovery {
 
     public Map<String, Connection> getConnections() {
         return connections;
-    }
-
-    private static String getCurrentNamespace() {
-        try {
-            String namespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
-            if (Files.exists(Paths.get(namespacePath))) {
-                return new String(Files.readAllBytes(Paths.get(namespacePath))).trim();
-            }
-        } catch (IOException e) {
-        }
-        return "default";
     }
 }
