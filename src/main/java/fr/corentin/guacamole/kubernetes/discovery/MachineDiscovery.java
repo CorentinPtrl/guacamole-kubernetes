@@ -4,12 +4,9 @@ import com.google.inject.Inject;
 import fr.corentin.guacamole.kubernetes.ConfigurationService;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-import fr.corentin.guacamole.kubernetes.auth.UserContext;
 import io.kubernetes.client.informer.ResourceEventHandler;
 import io.kubernetes.client.informer.SharedIndexInformer;
 import io.kubernetes.client.informer.SharedInformerFactory;
@@ -20,7 +17,6 @@ import io.kubernetes.client.openapi.models.V1Secret;
 import io.kubernetes.client.openapi.models.V1Service;
 import io.kubernetes.client.openapi.models.V1ServiceList;
 import io.kubernetes.client.openapi.models.V1ServicePort;
-import io.kubernetes.client.util.CallGeneratorParams;
 import io.kubernetes.client.util.Config;
 import io.kubernetes.client.util.generic.GenericKubernetesApi;
 import org.apache.guacamole.GuacamoleException;
@@ -40,9 +36,7 @@ public class MachineDiscovery {
     private final Map<String, Connection> connections;
 
     private static final String PROTOCOL_ANNOTATION = "org.apache.guacamole/protocol";
-    private static final String NAME_ANNOTATION = "org.apache.guacamole/name";
-    private static final String USERNAME_ANNOTATION = "org.apache.guacamole/username";
-    private static final String PASSWORD_ANNOTATION = "org.apache.guacamole/password-secret";
+    private static final String ANNOTATIONS_PREFIX = "org.apache.guacamole/";
     private static final Logger logger = LoggerFactory.getLogger(MachineDiscovery.class);
 
     public MachineDiscovery() {
@@ -58,21 +52,6 @@ public class MachineDiscovery {
     private String serviceKey(V1Service svc) {
         String hostname = String.format("%s.%s", svc.getMetadata().getName(), svc.getMetadata().getNamespace());
         return Integer.toString(hostname.hashCode());
-    }
-
-    private String getPassword(String secretName, String namespace) {
-        try {
-            V1Secret secret = coreV1Api.readNamespacedSecret(secretName, namespace, null);
-            if (secret.getData() != null && secret.getData().containsKey("password")) {
-                return new String(Base64.getDecoder().decode(secret.getData().get("password"))).trim();
-            } else {
-                logger.warn("Secret " + secretName + " does not contain a 'password' key or has no data.");
-            }
-        } catch (ApiException e) {
-            logger.error("Failed to read secret " + secretName + " from namespace " + namespace +
-                    ". HTTP status: " + e.getCode() + ", message: " + e.getMessage(), e);
-        }
-        return "";
     }
 
     private SimpleConnection connectionAdapter(V1Service svc) throws GuacamoleException {
@@ -92,19 +71,25 @@ public class MachineDiscovery {
         guacConf.setParameter("port", svcPort.getPort().toString());
         guacConf.setParameter("ignore-cert", "true");
 
-        boolean hasAuth = annotations.containsKey(USERNAME_ANNOTATION) &&
-                         annotations.containsKey(PASSWORD_ANNOTATION);
-        if (hasAuth) {
-            guacConf.setParameter("username", annotations.get(USERNAME_ANNOTATION));
-            guacConf.setParameter("password", getPassword(annotations.get(PASSWORD_ANNOTATION), svc.getMetadata().getNamespace()));
-        } else {
-            guacConf.setParameter("disable-auth", "true");
-        }
+        for (Map.Entry<String, String> entry : annotations.entrySet()) {
+			if (!entry.getKey().startsWith(ANNOTATIONS_PREFIX) || entry.getKey().equals(PROTOCOL_ANNOTATION)) {
+				continue;
+			}
+            String paramName = entry.getKey().substring(ANNOTATIONS_PREFIX.length());
+            if (paramName.endsWith("-secret")) {
+                paramName = paramName.substring(0, paramName.length()  - "-secret".length());
+				String secretValue = getSecretValue(entry.getValue(), svc.getMetadata().getNamespace());
+				guacConf.setParameter(paramName, secretValue);
+			} else {
+                guacConf.setParameter(paramName, entry.getValue());
+            }
+		}
 
-        String connectionName = annotations.get(NAME_ANNOTATION);
-        guacConf.setParameter("name", connectionName);
+        if (guacConf.getParameter("name") == null) {
+			guacConf.setParameter("name", hostname);
+		}
 
-        SimpleConnection conn = new SimpleConnection(connectionName, Integer.toString(hostname.hashCode()), guacConf);
+        SimpleConnection conn = new SimpleConnection(guacConf.getParameter("name"), Integer.toString(hostname.hashCode()), guacConf);
         conn.setParentIdentifier("ROOT");
         return conn;
     }
@@ -142,7 +127,7 @@ public class MachineDiscovery {
                     System.out.println("Adding service " + svc.getMetadata().getName() + " as a Guacamole connection.");
                     String key = serviceKey(svc);
                     connections.put(key, connectionAdapter(svc));
-                } catch (GuacamoleException e) {
+                } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
@@ -157,7 +142,7 @@ public class MachineDiscovery {
                 try {
                     String key = serviceKey(newSvc);
                     connections.put(key, connectionAdapter(newSvc));
-                } catch (GuacamoleException e) {
+                } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
@@ -177,6 +162,26 @@ public class MachineDiscovery {
         if (informerFactory != null) {
             informerFactory.stopAllRegisteredInformers();
         }
+    }
+
+    private String getSecretValue(String secretPath, String namespace) {
+        try {
+            String secretName = secretPath.split("/")[0];
+            String secretKey = secretPath.split("/")[1];
+            V1Secret secret = coreV1Api.readNamespacedSecret(secretName, namespace, null);
+            if (secret.getData() != null && secret.getData().containsKey(secretKey)) {
+                return new String(secret.getData().get(secretKey));
+            } else {
+                logger.warn("Secret " + secretPath + " does not contain a '" + secretKey + "' key or has no data.");
+            }
+        } catch (ApiException e) {
+            logger.error("Failed to read secret " + secretPath + " from namespace " + namespace +
+                    ". HTTP status: " + e.getCode() + ", message: " + e.getMessage(), e);
+        }
+        catch (ArrayIndexOutOfBoundsException e) {
+            logger.error("Invalid secret path format: " + secretPath + ". Expected format is 'secretName/secretKey'.", e);
+        }
+        return "";
     }
 
     public Map<String, Connection> getConnections() {

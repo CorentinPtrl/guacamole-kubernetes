@@ -1,54 +1,76 @@
 # Guacamole Kubernetes Extension
 
-A Kubernetes-native extension for [Apache Guacamole](https://guacamole.apache.org/) that automatically discovers and exposes services within a Kubernetes cluster as Guacamole connections.
+An [Apache Guacamole](https://guacamole.apache.org/) extension that automatically discovers Kubernetes services and exposes them as Guacamole connections. Just annotate your services — no manual Guacamole configuration needed.
 
-## Overview
+## Quick Start
 
-This extension enables Apache Guacamole to dynamically discover services running in a Kubernetes cluster and automatically create remote desktop/SSH connections to them. Services are discovered via Kubernetes Service annotations, making it easy to expose applications without manual configuration.
+### Build
 
-## Features
-
-- **Automatic Service Discovery**: Continuously monitors Kubernetes services and automatically creates/removes Guacamole connections
-- **Annotation-Based Configuration**: Simple service annotation to expose applications through Guacamole
-- **In-Cluster Operation**: Designed to run as a Guacamole deployment within Kubernetes
-- **Dynamic Connection Management**: Real-time updates as services are created or destroyed
-- **Delegation Mode**: Optional connection delegation to work alongside other authentication providers
-
-## Requirements
-
-- Apache Guacamole 1.6.0
-- Java 8 or higher
-- Kubernetes cluster (for deployment)
-- Access to Kubernetes API (via service account when running in-cluster)
-
-### Deployment
-
-1. Copy the JAR file to your Guacamole extensions directory:
 ```bash
-cp build/libs/guacamole-kubernetes-1.6.0.jar /etc/guacamole/extensions/
+./gradlew shadowJar
 ```
 
-2. Restart Guacamole to load the extension.
+### Install
+
+Copy `guacamole-kubernetes-1.6.0-all.jar` to `/etc/guacamole/extensions/` and restart Guacamole.
+
+### Annotate a Service
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-desktop
+  annotations:
+    org.apache.guacamole/protocol: "rdp"
+    org.apache.guacamole/name: "My Desktop"
+    org.apache.guacamole/username: "admin"
+    org.apache.guacamole/password-secret: "my-secret/password"
+spec:
+  ports:
+    - name: rdp          # must match the protocol annotation
+      port: 3389
+  selector:
+    app: my-desktop
+```
+
+The connection appears in Guacamole automatically. `hostname` and `port` are derived from the service — no need to set them.
+
+## Annotations
+
+Any annotation prefixed with `org.apache.guacamole/` is forwarded as a [Guacamole connection parameter](https://guacamole.apache.org/doc/gug/configuring-guacamole.html#connection-configuration).
+
+| Annotation | Description |
+|---|---|
+| `org.apache.guacamole/protocol` | **(required)** Connection protocol: `rdp`, `vnc`, `ssh`, `telnet`, `kubernetes` |
+| `org.apache.guacamole/name` | Display name (defaults to `<service>.<namespace>`) |
+| `org.apache.guacamole/<param>` | Any connection parameter (e.g. `username`, `security`, `color-depth`) |
+| `org.apache.guacamole/<param>-secret` | Read the parameter value from a Kubernetes Secret (`<secretName>/<key>`) |
+
+### Secret References
+
+Annotations ending in `-secret` resolve their value from a Kubernetes Secret in the same namespace. The format is `<secretName>/<key>`:
+
+```yaml
+org.apache.guacamole/password-secret: "my-secret/password"
+#                                      ─────────  ────────
+#                                      secret name    key
+```
 
 ## Configuration
 
-### Service Annotations
+Optional property in `guacamole.properties`:
 
-To expose a Kubernetes service through Guacamole, add the following annotations:
+| Property | Default | Description |
+|---|---|---|
+| `kubernetes-delegate-connections` | `false` | Merge discovered connections into another auth provider's directory instead of providing a standalone context |
 
-```yaml
-annotations:
-  org.apache.guacamole/protocol: "rdp"
-  org.apache.guacamole/name: "My Desktop"
-  org.apache.guacamole/username: "admin"
-  org.apache.guacamole/password-secret: "my-secret"
-```
+## Requirements
 
-### Supported Annotations
+- Apache Guacamole **1.6.0**
+- Java 8+
+- Kubernetes cluster with a service account that can read **Services** and **Secrets**
 
-| Annotation | Description | Example |
-|------------|-------------|---------|
-| `org.apache.guacamole/protocol` | Connection protocol (rdp, vnc) | `rdp` |
-| `org.apache.guacamole/name` | Display name in Guacamole | `My Desktop` |
-| `org.apache.guacamole/username` | Username for authentication | `admin` |
-| `org.apache.guacamole/password-secret` | Kubernetes Secret name containing the password | `my-secret` |
+## License
+
+[Apache License 2.0](LICENSE)
