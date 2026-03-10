@@ -25,7 +25,7 @@ metadata:
     org.apache.guacamole/protocol: "rdp"
     org.apache.guacamole/name: "My Desktop"
     org.apache.guacamole/username: "admin"
-    org.apache.guacamole/password-secret: "my-secret/password"
+    org.apache.guacamole/password-secret: "my-secret:password"
 spec:
   ports:
     - name: rdp          # must match the protocol annotation
@@ -40,19 +40,19 @@ The connection appears in Guacamole automatically. `hostname` and `port` are der
 
 Any annotation prefixed with `org.apache.guacamole/` is forwarded as a [Guacamole connection parameter](https://guacamole.apache.org/doc/gug/configuring-guacamole.html#connection-configuration).
 
-| Annotation | Description |
-|---|---|
+| Annotation | Description                                                                     |
+|---|---------------------------------------------------------------------------------|
 | `org.apache.guacamole/protocol` | **(required)** Connection protocol: `rdp`, `vnc`, `ssh`, `telnet`, `kubernetes` |
-| `org.apache.guacamole/name` | Display name (defaults to `<service>.<namespace>`) |
-| `org.apache.guacamole/<param>` | Any connection parameter (e.g. `username`, `security`, `color-depth`) |
-| `org.apache.guacamole/<param>-secret` | Read the parameter value from a Kubernetes Secret (`<secretName>/<key>`) |
+| `org.apache.guacamole/name` | Display name (defaults to `<service>.<namespace>`)                              |
+| `org.apache.guacamole/<param>` | Any connection parameter (e.g. `username`, `security`, `color-depth`)           |
+| `org.apache.guacamole/<param>-secret` | Read the parameter value from a Kubernetes Secret (`<secretName>:<key>`)        |
 
 ### Secret References
 
-Annotations ending in `-secret` resolve their value from a Kubernetes Secret in the same namespace. The format is `<secretName>/<key>`:
+Annotations ending in `-secret` resolve their value from a Kubernetes Secret in the same namespace. The format is `<secretName>:<key>`:
 
 ```yaml
-org.apache.guacamole/password-secret: "my-secret/password"
+org.apache.guacamole/password-secret: "my-secret:password"
 #                                      ─────────  ────────
 #                                      secret name    key
 ```

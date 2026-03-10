@@ -120,11 +120,9 @@ public class MachineDiscovery {
             @Override
             public void onAdd(V1Service svc) {
                 if (!hasGuacamoleAnnotations(svc)) {
-                    System.out.println("Service " + svc.getMetadata().getName() + " does not have Guacamole annotations, skipping.");
                     return;
                 }
                 try {
-                    System.out.println("Adding service " + svc.getMetadata().getName() + " as a Guacamole connection.");
                     String key = serviceKey(svc);
                     connections.put(key, connectionAdapter(svc));
                 } catch (Exception e) {
@@ -155,7 +153,6 @@ public class MachineDiscovery {
         });
 
         informerFactory.startAllRegisteredInformers();
-        System.out.println("Informers started, watching for services in all namespaces");
     }
 
     public void stop() {
@@ -166,8 +163,8 @@ public class MachineDiscovery {
 
     private String getSecretValue(String secretPath, String namespace) {
         try {
-            String secretName = secretPath.split("/")[0];
-            String secretKey = secretPath.split("/")[1];
+            String secretName = secretPath.split(":")[0];
+            String secretKey = secretPath.split(":")[1];
             V1Secret secret = coreV1Api.readNamespacedSecret(secretName, namespace, null);
             if (secret.getData() != null && secret.getData().containsKey(secretKey)) {
                 return new String(secret.getData().get(secretKey));
