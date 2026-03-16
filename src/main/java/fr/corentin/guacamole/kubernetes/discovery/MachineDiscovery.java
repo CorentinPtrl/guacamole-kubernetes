@@ -17,6 +17,7 @@ import io.kubernetes.client.openapi.models.V1Secret;
 import io.kubernetes.client.openapi.models.V1Service;
 import io.kubernetes.client.openapi.models.V1ServiceList;
 import io.kubernetes.client.openapi.models.V1ServicePort;
+import io.kubernetes.client.util.CallGeneratorParams;
 import io.kubernetes.client.util.Config;
 import io.kubernetes.client.util.generic.GenericKubernetesApi;
 import org.apache.guacamole.GuacamoleException;
@@ -106,15 +107,40 @@ public class MachineDiscovery {
 
         informerFactory = new SharedInformerFactory(client);
 
-        GenericKubernetesApi serviceClient = new GenericKubernetesApi<>(
-                V1Service.class,
-                V1ServiceList.class,
-                "",
-                "v1",
-                "services",
-                client);
+        SharedIndexInformer<V1Service> serviceInformer;
 
-        SharedIndexInformer<V1Service> serviceInformer = informerFactory.sharedIndexInformerFor(serviceClient, V1Service.class, 10000);
+        if (!confService.getSelectedNamespace().isEmpty()) {
+            String selectedNamespace = confService.getSelectedNamespace();
+            serviceInformer = informerFactory.sharedIndexInformerFor(
+                            (CallGeneratorParams params) -> {
+                                return coreV1Api.listNamespacedServiceCall(
+                                        selectedNamespace,
+                                        null,
+                                        null,
+                                        null,
+                                        null,
+                                        null,
+                                        null,
+                                        params.resourceVersion,
+                                        null,
+                                        null,
+                                        params.timeoutSeconds,
+                                        params.watch,
+                                        null);
+                            },
+                            V1Service.class,
+                            V1ServiceList.class);
+        } else {
+            GenericKubernetesApi serviceClient = new GenericKubernetesApi<>(
+                    V1Service.class,
+                    V1ServiceList.class,
+                    "",
+                    "v1",
+                    "services",
+                    client);
+
+            serviceInformer = informerFactory.sharedIndexInformerFor(serviceClient, V1Service.class, 10000);
+        }
 
         serviceInformer.addEventHandler(new ResourceEventHandler<V1Service>() {
             @Override
