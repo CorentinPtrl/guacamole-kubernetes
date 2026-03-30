@@ -7,16 +7,15 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+import io.kubernetes.client.common.KubernetesObject;
 import io.kubernetes.client.informer.ResourceEventHandler;
 import io.kubernetes.client.informer.SharedIndexInformer;
 import io.kubernetes.client.informer.SharedInformerFactory;
 import io.kubernetes.client.openapi.ApiClient;
 import io.kubernetes.client.openapi.ApiException;
 import io.kubernetes.client.openapi.apis.CoreV1Api;
-import io.kubernetes.client.openapi.models.V1Secret;
-import io.kubernetes.client.openapi.models.V1Service;
-import io.kubernetes.client.openapi.models.V1ServiceList;
-import io.kubernetes.client.openapi.models.V1ServicePort;
+import io.kubernetes.client.openapi.models.*;
+import io.kubernetes.client.proto.V1;
 import io.kubernetes.client.util.CallGeneratorParams;
 import io.kubernetes.client.util.Config;
 import io.kubernetes.client.util.generic.GenericKubernetesApi;
@@ -36,63 +35,18 @@ public class MachineDiscovery {
     private SharedInformerFactory informerFactory;
     private final Map<String, Connection> connections;
 
-    private static final String PROTOCOL_ANNOTATION = "org.apache.guacamole/protocol";
-    private static final String ANNOTATIONS_PREFIX = "org.apache.guacamole/";
-    private static final Logger logger = LoggerFactory.getLogger(MachineDiscovery.class);
+    static final String PROTOCOL_ANNOTATION = "org.apache.guacamole/protocol";
+    static final String ANNOTATIONS_PREFIX = "org.apache.guacamole/";
+    static final Logger logger = LoggerFactory.getLogger(MachineDiscovery.class);
 
     public MachineDiscovery() {
         connections = new ConcurrentHashMap<>();
     }
 
-    private boolean hasGuacamoleAnnotations(V1Service svc) {
-        return svc.getMetadata() != null
-                && svc.getMetadata().getAnnotations() != null
-                && svc.getMetadata().getAnnotations().containsKey(PROTOCOL_ANNOTATION);
-    }
-
-    private String serviceKey(V1Service svc) {
-        String hostname = String.format("%s.%s", svc.getMetadata().getName(), svc.getMetadata().getNamespace());
-        return Integer.toString(hostname.hashCode());
-    }
-
-    private SimpleConnection connectionAdapter(V1Service svc) throws GuacamoleException {
-        Map<String, String> annotations = svc.getMetadata().getAnnotations();
-        String hostname = String.format("%s.%s", svc.getMetadata().getName(), svc.getMetadata().getNamespace());
-        String protocol = annotations.get(PROTOCOL_ANNOTATION);
-
-        V1ServicePort svcPort = svc.getSpec().getPorts().stream()
-                .filter(port -> protocol.equals(port.getName()))
-                .findFirst()
-                .orElseThrow(() -> new GuacamoleException(
-                        String.format("Service %s does not have a port named %s", hostname, protocol)));
-
-        GuacamoleConfiguration guacConf = new GuacamoleConfiguration();
-        guacConf.setProtocol(protocol);
-        guacConf.setParameter("hostname", hostname);
-        guacConf.setParameter("port", svcPort.getPort().toString());
-        guacConf.setParameter("ignore-cert", "true");
-
-        for (Map.Entry<String, String> entry : annotations.entrySet()) {
-			if (!entry.getKey().startsWith(ANNOTATIONS_PREFIX) || entry.getKey().equals(PROTOCOL_ANNOTATION)) {
-				continue;
-			}
-            String paramName = entry.getKey().substring(ANNOTATIONS_PREFIX.length());
-            if (paramName.endsWith("-secret")) {
-                paramName = paramName.substring(0, paramName.length()  - "-secret".length());
-				String secretValue = getSecretValue(entry.getValue(), svc.getMetadata().getNamespace());
-				guacConf.setParameter(paramName, secretValue);
-			} else {
-                guacConf.setParameter(paramName, entry.getValue());
-            }
-		}
-
-        if (guacConf.getParameter("name") == null) {
-			guacConf.setParameter("name", hostname);
-		}
-
-        SimpleConnection conn = new SimpleConnection(guacConf.getParameter("name"), Integer.toString(hostname.hashCode()), guacConf);
-        conn.setParentIdentifier("ROOT");
-        return conn;
+    private boolean hasGuacamoleAnnotations(KubernetesObject kubernetesObject) {
+        return kubernetesObject.getMetadata() != null
+                && kubernetesObject.getMetadata().getAnnotations() != null
+                && kubernetesObject.getMetadata().getAnnotations().containsKey(PROTOCOL_ANNOTATION);
     }
 
     public void start() throws GuacamoleException {
@@ -107,6 +61,94 @@ public class MachineDiscovery {
 
         informerFactory = new SharedInformerFactory(client);
 
+        setupPodInformer();
+        setupServiceInformer();
+
+        informerFactory.startAllRegisteredInformers();
+    }
+
+    private void setupPodInformer() throws GuacamoleException {
+        SharedIndexInformer<V1Pod> podInformer;
+
+        if (!confService.getSelectedNamespace().isEmpty()) {
+            String selectedNamespace = confService.getSelectedNamespace();
+            podInformer = informerFactory.sharedIndexInformerFor(
+                    (CallGeneratorParams params) -> {
+                        return coreV1Api.listNamespacedPodCall(
+                                selectedNamespace,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                params.resourceVersion,
+                                null,
+                                null,
+                                params.timeoutSeconds,
+                                params.watch,
+                                null);
+                    },
+                    V1Pod.class,
+                    V1PodList.class);
+
+
+        } else {
+            GenericKubernetesApi podClient = new GenericKubernetesApi<>(
+                    V1Pod.class,
+                    V1PodList.class,
+                    "",
+                    "v1",
+                    "pods",
+                    client);
+
+            podInformer = informerFactory.sharedIndexInformerFor(podClient, V1Pod.class, 10000);
+        }
+
+        podInformer.addEventHandler(new ResourceEventHandler<V1Pod>() {
+            @Override
+            public void onAdd(V1Pod pod) {
+                if (pod.getStatus() == null || pod.getStatus().getPodIP() == null) {
+                    return;
+                }
+                if (!hasGuacamoleAnnotations(pod)) {
+                    return;
+                }
+                try {
+                    String key = pod.getStatus().getPodIP();
+                    connections.put(key, Utils.connectionAdapter(pod, coreV1Api));
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            @Override
+            public void onUpdate(V1Pod oldPod, V1Pod newPod) {
+                if (newPod.getStatus() == null || newPod.getStatus().getPodIP() == null) {
+                    return;
+                }
+                if (!hasGuacamoleAnnotations(newPod)) {
+                    connections.remove(newPod.getStatus().getPodIP());
+                    return;
+                }
+                try {
+                    connections.put(newPod.getStatus().getPodIP(), Utils.connectionAdapter(newPod, coreV1Api));
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            @Override
+            public void onDelete(V1Pod pod, boolean deletedFinalStateUnknown) {
+                if (pod.getStatus() == null || pod.getStatus().getPodIP() == null) {
+                    return;
+                }
+                connections.remove(pod.getStatus().getPodIP());
+            }
+        });
+    }
+
+    private void setupServiceInformer() throws GuacamoleException {
         SharedIndexInformer<V1Service> serviceInformer;
 
         if (!confService.getSelectedNamespace().isEmpty()) {
@@ -149,8 +191,8 @@ public class MachineDiscovery {
                     return;
                 }
                 try {
-                    String key = serviceKey(svc);
-                    connections.put(key, connectionAdapter(svc));
+                    String key = Utils.serviceKey(svc);
+                    connections.put(key, Utils.connectionAdapter(svc, coreV1Api));
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -159,13 +201,13 @@ public class MachineDiscovery {
             @Override
             public void onUpdate(V1Service oldSvc, V1Service newSvc) {
                 if (!hasGuacamoleAnnotations(newSvc)) {
-                    String key = serviceKey(newSvc);
+                    String key = Utils.serviceKey(newSvc);
                     connections.remove(key);
                     return;
                 }
                 try {
-                    String key = serviceKey(newSvc);
-                    connections.put(key, connectionAdapter(newSvc));
+                    String key = Utils.serviceKey(newSvc);
+                    connections.put(key, Utils.connectionAdapter(newSvc, coreV1Api));
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -173,38 +215,16 @@ public class MachineDiscovery {
 
             @Override
             public void onDelete(V1Service svc, boolean deletedFinalStateUnknown) {
-                String key = serviceKey(svc);
+                String key = Utils.serviceKey(svc);
                 connections.remove(key);
             }
         });
-
-        informerFactory.startAllRegisteredInformers();
     }
 
     public void stop() {
         if (informerFactory != null) {
             informerFactory.stopAllRegisteredInformers();
         }
-    }
-
-    private String getSecretValue(String secretPath, String namespace) {
-        try {
-            String secretName = secretPath.split(":")[0];
-            String secretKey = secretPath.split(":")[1];
-            V1Secret secret = coreV1Api.readNamespacedSecret(secretName, namespace, null);
-            if (secret.getData() != null && secret.getData().containsKey(secretKey)) {
-                return new String(secret.getData().get(secretKey));
-            } else {
-                logger.warn("Secret " + secretPath + " does not contain a '" + secretKey + "' key or has no data.");
-            }
-        } catch (ApiException e) {
-            logger.error("Failed to read secret " + secretPath + " from namespace " + namespace +
-                    ". HTTP status: " + e.getCode() + ", message: " + e.getMessage(), e);
-        }
-        catch (ArrayIndexOutOfBoundsException e) {
-            logger.error("Invalid secret path format: " + secretPath + ". Expected format is 'secretName/secretKey'.", e);
-        }
-        return "";
     }
 
     public Map<String, Connection> getConnections() {
