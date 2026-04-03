@@ -3,7 +3,6 @@ package fr.corentin.guacamole.kubernetes.discovery;
 import io.kubernetes.client.openapi.ApiException;
 import io.kubernetes.client.openapi.apis.CoreV1Api;
 import io.kubernetes.client.openapi.models.*;
-import io.kubernetes.client.proto.V1;
 import org.apache.guacamole.GuacamoleException;
 import org.apache.guacamole.net.auth.simple.SimpleConnection;
 import org.apache.guacamole.protocol.GuacamoleConfiguration;
@@ -49,7 +48,7 @@ public class Utils {
             guacConf.setParameter("name", hostname);
         }
 
-        SimpleConnection conn = new SimpleConnection(guacConf.getParameter("name"), Integer.toString(hostname.hashCode()), guacConf);
+        SimpleConnection conn = new SimpleConnection(guacConf.getParameter("name"), objectKey(svc), guacConf);
         conn.setParentIdentifier("ROOT");
         return conn;
     }
@@ -91,7 +90,7 @@ public class Utils {
             guacConf.setParameter("name", pod.getMetadata().getName());
         }
 
-        SimpleConnection conn = new SimpleConnection(guacConf.getParameter("name"), pod.getStatus().getPodIP(), guacConf);
+        SimpleConnection conn = new SimpleConnection(guacConf.getParameter("name"), objectKey(pod), guacConf);
         conn.setParentIdentifier("ROOT");
         return conn;
     }
@@ -116,9 +115,12 @@ public class Utils {
         return "";
     }
 
-    static String serviceKey(V1Service svc) {
-        String hostname = String.format("%s.%s", svc.getMetadata().getName(), svc.getMetadata().getNamespace());
-        return Integer.toString(hostname.hashCode());
+    static String objectKey(V1Service svc) {
+        return "svc/" + svc.getMetadata().getNamespace() + "/" + svc.getMetadata().getName();
+    }
+
+    static String objectKey(V1Pod pod) {
+        return "pod/" + pod.getMetadata().getNamespace() + "/" + pod.getMetadata().getName();
     }
 
 }

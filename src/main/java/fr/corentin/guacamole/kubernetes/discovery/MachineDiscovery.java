@@ -12,17 +12,13 @@ import io.kubernetes.client.informer.ResourceEventHandler;
 import io.kubernetes.client.informer.SharedIndexInformer;
 import io.kubernetes.client.informer.SharedInformerFactory;
 import io.kubernetes.client.openapi.ApiClient;
-import io.kubernetes.client.openapi.ApiException;
 import io.kubernetes.client.openapi.apis.CoreV1Api;
 import io.kubernetes.client.openapi.models.*;
-import io.kubernetes.client.proto.V1;
 import io.kubernetes.client.util.CallGeneratorParams;
 import io.kubernetes.client.util.Config;
 import io.kubernetes.client.util.generic.GenericKubernetesApi;
 import org.apache.guacamole.GuacamoleException;
 import org.apache.guacamole.net.auth.Connection;
-import org.apache.guacamole.net.auth.simple.SimpleConnection;
-import org.apache.guacamole.protocol.GuacamoleConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -115,8 +111,7 @@ public class MachineDiscovery {
                     return;
                 }
                 try {
-                    String key = pod.getStatus().getPodIP();
-                    connections.put(key, Utils.connectionAdapter(pod, coreV1Api));
+                    connections.put(Utils.objectKey(pod), Utils.connectionAdapter(pod, coreV1Api));
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -128,11 +123,11 @@ public class MachineDiscovery {
                     return;
                 }
                 if (!hasGuacamoleAnnotations(newPod)) {
-                    connections.remove(newPod.getStatus().getPodIP());
+                    connections.remove(Utils.objectKey(newPod));
                     return;
                 }
                 try {
-                    connections.put(newPod.getStatus().getPodIP(), Utils.connectionAdapter(newPod, coreV1Api));
+                    connections.put(Utils.objectKey(newPod), Utils.connectionAdapter(newPod, coreV1Api));
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -143,7 +138,7 @@ public class MachineDiscovery {
                 if (pod.getStatus() == null || pod.getStatus().getPodIP() == null) {
                     return;
                 }
-                connections.remove(pod.getStatus().getPodIP());
+                connections.remove(Utils.objectKey(pod));
             }
         });
     }
@@ -191,7 +186,7 @@ public class MachineDiscovery {
                     return;
                 }
                 try {
-                    String key = Utils.serviceKey(svc);
+                    String key = Utils.objectKey(svc);
                     connections.put(key, Utils.connectionAdapter(svc, coreV1Api));
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -201,12 +196,12 @@ public class MachineDiscovery {
             @Override
             public void onUpdate(V1Service oldSvc, V1Service newSvc) {
                 if (!hasGuacamoleAnnotations(newSvc)) {
-                    String key = Utils.serviceKey(newSvc);
+                    String key = Utils.objectKey(newSvc);
                     connections.remove(key);
                     return;
                 }
                 try {
-                    String key = Utils.serviceKey(newSvc);
+                    String key = Utils.objectKey(newSvc);
                     connections.put(key, Utils.connectionAdapter(newSvc, coreV1Api));
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -215,7 +210,7 @@ public class MachineDiscovery {
 
             @Override
             public void onDelete(V1Service svc, boolean deletedFinalStateUnknown) {
-                String key = Utils.serviceKey(svc);
+                String key = Utils.objectKey(svc);
                 connections.remove(key);
             }
         });
